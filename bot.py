@@ -19,7 +19,10 @@ def target(text):
 
 class Bot:
     def __init__(self, token, admin, db_path='data/orders.sqlite3', demo=True, catalog='catalog.json'):
-        self.token, self.admin, self.demo = token, int(admin), demo
+        admin_text = str(admin).strip()
+        if not admin_text.isascii() or not admin_text.isdecimal() or int(admin_text) <= 0:
+            raise SystemExit('ADMIN_ID must be your positive numeric Telegram user ID, not a username or bot ID. Update the GitHub Actions secret ADMIN_ID.')
+        self.token, self.admin, self.demo = token.strip(), int(admin_text), demo
         self.catalog = json.loads(Path(catalog).read_text())
         assert self.admin > 0
         assert all(isinstance(p['stars'], int) and p['stars'] > 0 for p in self.catalog)
