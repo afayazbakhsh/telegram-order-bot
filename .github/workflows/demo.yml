@@ -16,6 +16,7 @@ jobs:
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       ADMIN_ID: ${{ secrets.ADMIN_ID }}
+      SUPPORT_CONTACT: ${{ secrets.SUPPORT_CONTACT || secrets.SUPPORT || vars.SUPPORT_CONTACT || vars.SUPPORT || '' }}
       DEMO_MODE: '1'
       RUN_SECONDS: '600'
       DB_PATH: /tmp/demo-orders.sqlite3
