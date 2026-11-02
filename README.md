@@ -64,3 +64,11 @@ python -m py_compile bot.py
 ```
 
 این تست‌ها بدون تلگرام واقعی‌اند؛ پرداخت و اتصال زنده تا اضافه‌شدن Secrets آزمایش نشده‌اند.
+
+## Updated packages and support
+
+Demo packages: 500 members = 193 Stars; 1,000 = 385 Stars; 5,000 = 1,925 Stars. These are provisional proportional prices, not a live sales launch.
+
+Set repository secret `SUPPORT_CONTACT` or `SUPPORT` to your public @username, t.me link or numeric Telegram user ID. The demo workflow reads either name; repository Variables with either name are also supported. This contact is intentionally shown to customers. Username links are preferred; numeric tg:// links depend on Telegram privacy and client behavior. Without a valid support setting, the Contact Support button points to the configured admin.
+
+Customers receive a readable order card with Order ID, package, channel, status and a support button. Preparing your order means received and waiting for the operator; In progress appears only after the operator starts processing. Demo cards explicitly state no money is taken and no delivery occurs.
