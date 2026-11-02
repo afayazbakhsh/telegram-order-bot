@@ -1,0 +1,28 @@
+name: Run demo bot (10 minutes)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: order-bot-demo
+  cancel-in-progress: false
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      ADMIN_ID: ${{ secrets.ADMIN_ID }}
+      DEMO_MODE: '1'
+      RUN_SECONDS: '600'
+      DB_PATH: /tmp/demo-orders.sqlite3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate secrets
+        run: |
+          test -n "$BOT_TOKEN" || { echo 'Add BOT_TOKEN Actions secret.'; exit 1; }
+          test -n "$ADMIN_ID" || { echo 'Add ADMIN_ID Actions secret.'; exit 1; }
+      - run: python bot.py
