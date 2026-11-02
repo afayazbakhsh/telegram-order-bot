@@ -1,74 +1,46 @@
-# Telegram Order Bot — MVP
+# Crowdio — Telegram Order Bot
 
-بات سفارش با Python استاندارد، SQLite و تحویل دستی؛ رابط انگلیسی. پیش‌فرض دمو است و پولی دریافت نمی‌کند.
+بات سفارش انگلیسی، سه پکیج، پرداخت واقعی Telegram Stars و تحویل دستی توسط مدیر.
 
-## اجرای آزمایشی با یک کلیک
+## اجرای ده‌دقیقه‌ای فعلی
 
-1. یک بات اختصاصی تست با BotFather بسازید؛ این برنامه updateهای آن را مصرف می‌کند. روی سرور دیگری هم‌زمان اجرا نشود.
-2. خود مدیر باید ابتدا به بات `/start` بفرستد.
-3. Settings → Secrets and variables → Actions: دو Repository secret بسازید:
-   - `BOT_TOKEN`: توکن BotFather
-   - `ADMIN_ID`: آیدی عددی اکانت خودتان، نه username
-4. Actions → Run demo bot (10 minutes) → Run workflow.
-5. تلگرام: `/start` → New order → انتخاب پکیج → لینک عمومی مقصد → Simulate payment.
-6. مدیر با Start processing و Complete وضعیت را تغییر می‌دهد. `/queue` صف سفارش‌ها را نشان می‌دهد.
+Repository Secrets: `BOT_TOKEN` و `ADMIN_ID` (آیدی عددی خود مدیر). پشتیبانی: `SUPPORT_CONTACT` یا `SUPPORT`، با مقدار @username یا لینک t.me یا آیدی عددی. نام کاربری عمومی برای لینک پشتیبانی بهتر است.
 
-این دمو حدود ده دقیقه فعال است؛ پرداخت شبیه‌سازی می‌شود و دیتابیس بعد از اجرا از بین می‌رود. برای سفارش واقعی نیست. هیچ دیتابیس یا اطلاعات مشتری در artifact ذخیره نمی‌شود. توکن را در commit، issue یا گفتگو قرار ندهید؛ این مخزن عمومی است.
+Actions → Run bot (10-minute live session) → Run workflow. دکمه‌ی مشتری فاکتور رسمی Stars را باز می‌کند. این workflow **پول واقعی** دریافت می‌کند. مدت اجرا ۶۰۰ ثانیه است؛ سی ثانیه‌ی آخر فاکتور و pre-checkout جدید تأیید نمی‌شوند. فاکتور ارسال‌شده به‌تنهایی پرداخت محسوب نمی‌شود. سفارش پس از successful_payment با تطبیق کاربر، مبلغ، currency و شناسه ثبت می‌شود.
 
-## اجرای دائمی
+قیمت‌ها در catalog.json: ۵۰۰ عضو ۱۹۳، هزار عضو ۳۸۵ و پنج‌هزار عضو ۱۹۲۵ استارز. تحویل دستی است. مشخصات محصول و شرایط واقعی کسب‌وکار را پیش از تبلیغ عمومی نهایی کنید. تلگرام social growth manipulation را در شرایط Bot Platform ممنوع کرده است؛ کد یا امکان پرداخت، تأیید تلگرام برای این خدمت نیست.
 
-Python 3.12؛ بدون نیاز به pip. پیشنهاد: Docker Compose روی یک سرور همیشه‌روشن.
+## مسیر مشتری
+
+New Order → Package → Channel → Review → Pay with Stars → Payment received / Awaiting delivery.
+
+پس از پرداخت، مشتری کارت سفارش با شناسه‌ی قابل کپی، مبلغ، کانال، وضعیت و دکمه‌ی مستقیم پشتیبانی می‌گیرد. پیام مشتری به ارسال موفق اعلان مدیر وابسته نیست. مدیر با Start processing وضعیت را In progress و با Complete آن را Completed می‌کند. `/queue` برای مدیر؛ `/orders`، `/support`، `/paysupport` و `/terms` برای مشتری.
+
+## ذخیره‌سازی موقتِ قابل‌بازیابی برای تست
+
+در Actions، SQLite قبل از صدور invoice و پس از پرداخت و تغییر وضعیت با Fernet رمزگذاری و در `.runtime/orders.enc` روی main ذخیره می‌شود. توکن بات صرفاً در Secret می‌ماند؛ هیچ آیدی، کانال، مبلغ یا شناسه پرداختی به شکل متن واضح منتشر نمی‌شود. کلید رمزگذاری از توکن بات و یک رشته‌ی مخصوص همین کاربرد مشتق می‌شود. **قبل از تعویض توکن بات، اطلاعات را با کلید قبلی بازیابی و منتقل کنید**؛ توکن جدید قادر به خواندن فایل قدیمی نیست.
+
+ثبت checkpoint باید پیش از تأیید پردازش update موفق شود. خطای نوشتن یا رمزگشایی مانع شروع جلسه می‌شود. برای جلوگیری از دو نویسنده، هم‌زمان فقط یک workflow از گروه order-bot-demo اجرا می‌شود و اجرای بعدی در صف می‌ماند. در صورت قطع ناگهانی ممکن است اعلان تکراری برسد؛ شناسه سفارش ثابت است و مدیر باید قبل از تحویل دستی آن را بررسی کند.
+
+این راه‌حل برای تست محدود است، نه زیرساخت عمومی: محدودیت GitHub API، اندازه فایل، توقف runner و قطع شبکه همچنان وجود دارند. برای فعالیت عمومی یک سرویس همیشه‌روشن و DB پایدار استفاده کنید. داده‌ی رمزگذاری‌شده در تاریخچه‌ی git باقی می‌ماند. توکن بات را افشا نکنید.
+
+## سرور دائمی
 
 ```sh
 cp .env.example .env
-# .env را فقط روی سرور ویرایش کنید.
+# تنظیم .env روی سرور
 docker compose up -d --build
 ```
 
-Compose اطلاعات سفارش را در volume پایدار نگه می‌دارد. از volume بکاپ امن بگیرید. فقط یک پردازش بات اجرا شود. webhook لازم نیست و برنامه webhook موجود را خودکار حذف نمی‌کند.
+Compose دیتابیس را در volume نگه می‌دارد و env را بارگذاری می‌کند. اگر STATE_REPOSITORY و STATE_GITHUB_TOKEN تنظیم نشده باشند، ذخیره‌سازی فقط در volume محلی انجام می‌شود. برای اجرای مستقیم، متغیرهای محیط را تنظیم و `pip install -r requirements.txt` سپس `python bot.py` اجرا کنید؛ .env در این روش خودکار خوانده نمی‌شود.
 
-اجرای مستقیم هم ممکن است: `python bot.py`، ولی متغیرهای محیط باید قبلاً تنظیم شوند؛ فایل .env در این روش خودکار خوانده نمی‌شود.
-
-## پکیج و پرداخت
-
-کاتالوگ در `catalog.json` قابل ویرایش است. پکیج نمونه ۱۰۰۰ عضو با ۳۸۵ Stars است. این قیمت مقدار اولیه است، نه تصمیم نهایی: با نرخ اعلام‌شده‌ی ۰٫۰۱۳ دلار پاداش برای هر Star تقریباً پنج دلار دریافتی توسعه‌دهنده است؛ هزینه‌ی خرید Stars برای مشتری متفاوت است.
-
-برای دمو `DEMO_MODE=1` باقی بماند. پرداخت واقعی نیازمند `DEMO_MODE=0`، تنظیم `SUPPORT_CONTACT` و `TERMS_TEXT` و سرور با DB پایدار است. زمان تحویل، شرایط بازپرداخت و جبران باید پیش از فروش واقعی نهایی شود. پرداخت دیجیتال در بات با XTR است.
-
-شرایط Telegram Bot Platform، social growth manipulation را ممنوع می‌کند؛ کاتالوگ نمونه تضمین تأیید فعالیت نیست: https://telegram.org/tos/bot-developers
-
-## قابلیت‌ها
-
-- انتخاب پکیج، بررسی قالب لینک عمومی، تأیید و پرداخت.
-- سفارش‌های من؛ `/support`، `/paysupport` و `/terms`.
-- مدیر با ADMIN_ID کنترل می‌شود؛ دکمه‌ها برای دیگران مجوز ایجاد نمی‌کنند.
-- پرداخت با تطبیق مبلغ، مالک سفارش، payload و currency ثبت می‌شود؛ redelivery پرداخت دوباره سفارش نمی‌سازد.
-- پرداخت دوم برای یک سفارش در حالت واقعی به refundStarPayment می‌رود.
-- وضعیت‌ها: draft → ready → awaiting_payment → queued → processing → completed.
-- سفارش‌ها و offset دریافت پیام در SQLite ذخیره می‌شوند.
-
-## محدودیت‌های MVP
-
-- اتصال پنل تأمین، سایت و بازپرداخت دکمه‌ای هنوز اضافه نشده‌اند. بازپرداخت مشتری در حالت واقعی باید توسط اپراتور از API پیگیری شود.
-- ممکن است هنگام قطع شبکه اعلان تکراری برسد؛ قبل از ثبت دستی در پنل، شناسه سفارش را بررسی کنید.
-- خطای دائمی در یک update برای جلوگیری از گم‌شدن پرداخت دریافت‌شده نیاز به رسیدگی اپراتور دارد؛ پردازش مجدداً تلاش می‌شود.
-- خطای مبهم ارسال invoice ممکن است سفارش را awaiting_payment نگه دارد؛ اپراتور باید بررسی کند. بات خودکار invoice دوم نمی‌سازد.
-- قالب لینک بررسی می‌شود؛ وجود مقصد یا قابلیت تحویل از روی قالب ثابت نمی‌شود.
-- GitHub Actions فقط CI و دمو است؛ برای میزبانی دائمی و داده‌ی سفارش واقعی طراحی نشده است.
+پیش‌فرض entrypoint حالت واقعی است. DEMO_MODE=1 تنها برای شبیه‌سازی اختیاری باقی مانده است؛ workflow فعلی DEMO_MODE=0 دارد. TERMS_TEXT را می‌توان برای شرایط اختصاصی تنظیم کرد؛ متن پیش‌فرض ادعای زمان قطعی تحویل یا تضمین تعامل ندارد.
 
 ## بررسی کد
 
 ```sh
+python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-python -m py_compile bot.py
 ```
 
-این تست‌ها بدون تلگرام واقعی‌اند؛ پرداخت و اتصال زنده تا اضافه‌شدن Secrets آزمایش نشده‌اند.
-
-## Updated packages and support
-
-Demo packages: 500 members = 193 Stars; 1,000 = 385 Stars; 5,000 = 1,925 Stars. These are provisional proportional prices, not a live sales launch.
-
-Set repository secret `SUPPORT_CONTACT` or `SUPPORT` to your public @username, t.me link or numeric Telegram user ID. The demo workflow reads either name; repository Variables with either name are also supported. This contact is intentionally shown to customers. Username links are preferred; numeric tg:// links depend on Telegram privacy and client behavior. Without a valid support setting, the Contact Support button points to the configured admin.
-
-Customers receive a readable order card with Order ID, package, channel, status and a support button. Preparing your order means received and waiting for the operator; In progress appears only after the operator starts processing. Demo cards explicitly state no money is taken and no delivery occurs.
+تست‌ها API و ذخیره‌ی راه‌دور را شبیه‌سازی می‌کنند و پولی خرج نمی‌کنند. پرداخت واقعی فقط با تأیید خود کاربر در تلگرام انجام می‌شود. بازپرداخت دستی از API با استفاده از telegram_payment_charge_id ذخیره‌شده انجام می‌شود؛ دکمه‌ی بازپرداخت هنوز در این نسخه نیست.
