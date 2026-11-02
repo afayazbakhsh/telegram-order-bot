@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: order-bot-demo
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   demo:
     runs-on: ubuntu-latest
