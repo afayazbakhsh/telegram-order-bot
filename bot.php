@@ -12,6 +12,7 @@ final class Bot
     private const TERMS = 'Orders are delivered manually to public Telegram channels. Member counts may drop over time. For help with delivery, cancellation or refunds, contact Crowdio Support.';
     private const HOME = ['Main Menu', 'home'];
     private const NEW = ['🛒 New Order', 'new'];
+    private const ADMIN_HOME = ['Admin dashboard', 'admin'];
     private const MINE = ['📦 My Orders', 'mine'];
 
     private float $acceptUntil = INF;
@@ -104,7 +105,7 @@ final class Bot
         return Orders::packageTitle($row['purchased']);
     }
 
-    private function card(array $row): string
+    private function card(array $row, bool $customer = true): string
     {
         [$heading, $status] = match ($row['status']) {
             'queued' => ['✅ Payment received', 'Awaiting delivery'],
@@ -125,7 +126,7 @@ final class Bot
         if ($row['status'] === 'queued') {
             $text .= "\n\nOur team will deliver your order manually. We’ll let you know when delivery starts.";
         }
-        return $text . "\n\nFor help, contact support and share your Order ID.";
+        return $customer ? $text . "\n\nFor help, contact support and share your Order ID." : $text;
     }
 
     private function review(int $user, array $row, bool $changed = false): void
@@ -188,6 +189,94 @@ final class Bot
         return [['Start processing', "process:$id"], ['Complete', "complete:$id"]];
     }
 
+    private function adminOrder(int $user, string $id): void
+    {
+        $row = $this->orders->order($id);
+        if (!$row || ($row['charge'] !== null && str_starts_with($row['charge'], 'demo-'))) {
+            $this->send($user, 'Order not found. Paste an order ID from the dashboard.', [self::ADMIN_HOME]);
+            return;
+        }
+        $rejected = $this->orders->query('SELECT charge,refunded FROM rejected_payments WHERE order_id=? AND user=?',
+            [$id, $row['user']]);
+        $payment = $row['charge'] === null ? 'No accepted payment recorded' :
+            ($row['status'] === 'refunded' ? 'Refunded' : 'Received in Telegram Stars');
+        $text = $this->card($row, false) . "\n\nCustomer ID: <code>" . $row['user'] . "</code>\nPayment: " . $payment;
+        if ($row['charge'] !== null) {
+            $text .= "\nCharge ID: <code>" . $this->escape($row['charge']) . '</code>' .
+                "\nPaid at: " . ($row['paid_at'] === null ? 'Unavailable for this older order' :
+                    gmdate('Y-m-d H:i', $row['paid_at']) . ' UTC');
+        }
+        foreach (array_slice($rejected, 0, 5) as $attempt) {
+            $text .= "\nRejected charge: <code>" . $this->escape($attempt['charge']) . '</code> · ' .
+                ($attempt['refunded'] ? 'Refunded' : 'Refund pending');
+        }
+        $buttons = [self::ADMIN_HOME];
+        if ($row['charge'] !== null && in_array($row['status'], ['queued', 'processing'], true)) {
+            array_unshift($buttons, ...($row['status'] === 'queued' ? $this->adminButtons($id) : [['Complete', "complete:$id"]]));
+        }
+        $this->send($user, $text, $buttons);
+    }
+
+    private function adminList(int $user, string $filter, int $offset): void
+    {
+        [$title, $where] = match ($filter) {
+            'queue' => ['Delivery queue', "status IN ('queued','processing') AND charge IS NOT NULL"],
+            'paid' => ['Payments', 'charge IS NOT NULL'],
+            default => ['All orders', '1=1'],
+        };
+        $sort = $filter === 'queue' ? 'created ASC,id ASC' : 'created DESC,id DESC';
+        $rows = $this->orders->query("SELECT id,product,status,stars FROM orders WHERE ($where)
+            AND (charge IS NULL OR charge NOT LIKE 'demo-%') ORDER BY $sort LIMIT 7 OFFSET ?", [$offset]);
+        $text = "<b>$title</b>\n";
+        $buttons = [];
+        foreach (array_slice($rows, 0, 6) as $row) {
+            $text .= "\n<code>" . $this->escape($row['id']) . '</code> · ' . $this->escape($row['product']) .
+                ' · ' . number_format($row['stars']) . ' Stars · ' . $this->escape($row['status']);
+            $buttons[] = ['Open ' . $row['id'], 'detail:' . $row['id']];
+        }
+        if (!$rows) {
+            $text .= "\nNo orders on this page.";
+        }
+        if ($offset > 0) {
+            $buttons[] = ['‹ Previous', "admin-list:$filter:" . max(0, $offset - 6)];
+        }
+        if (count($rows) > 6) {
+            $buttons[] = ['Next ›', "admin-list:$filter:" . ($offset + 6)];
+        }
+        $buttons[] = self::ADMIN_HOME;
+        $this->send($user, $text, $buttons);
+    }
+
+    private function adminDashboard(int $user): void
+    {
+        $cutoff = time() - 7 * 86400;
+        $activity = $this->orders->first("SELECT COUNT(*) AS total,
+            COUNT(CASE WHEN first_seen>=? THEN 1 END) AS new,
+            COUNT(CASE WHEN last_seen>=? THEN 1 END) AS active FROM customer_activity WHERE user<>?",
+            [$cutoff, $cutoff, $user]);
+        $sales = $this->orders->first("SELECT COUNT(*) AS paid, COUNT(DISTINCT user) AS buyers,
+            COALESCE(SUM(stars),0) AS gross, COUNT(CASE WHEN paid_at>=? THEN 1 END) AS recent,
+            COALESCE(SUM(CASE WHEN paid_at>=? THEN stars END),0) AS recent_gross,
+            COUNT(CASE WHEN status='queued' THEN 1 END) AS queued,
+            COUNT(CASE WHEN status='processing' THEN 1 END) AS processing,
+            COUNT(CASE WHEN status='completed' THEN 1 END) AS completed
+            FROM orders WHERE charge NOT LIKE 'demo-%' AND user<>?", [$cutoff, $cutoff, $user]);
+        $refunds = $this->orders->first('SELECT COUNT(*) AS pending FROM rejected_payments WHERE refunded=0');
+        $text = "<b>🛠 Crowdio Admin</b>\n\n<b>Delivery</b>\nAwaiting: " . $sales['queued'] .
+            ' · In progress: ' . $sales['processing'] . ' · Completed: ' . $sales['completed'] .
+            "\nAutomatic refunds pending: " . $refunds['pending'] .
+            "\n\n<b>Sales</b>\nPaid orders: " . $sales['paid'] . ' · Unique buyers: ' . $sales['buyers'] .
+            "\nGross Stars recorded: " . number_format($sales['gross']) .
+            "\nLast 7 days: " . $sales['recent'] . ' paid · ' . number_format($sales['recent_gross']) . ' gross Stars' .
+            "\n<i>Recent sales use recorded payment dates. Gross Stars are before refunds.</i>" .
+            "\n\n<b>Customer activity</b>\nTracked accounts: " . $activity['total'] .
+            "\nLast 7 days: " . $activity['new'] . ' first seen · ' . $activity['active'] . ' active' .
+            "\n<i>Tracking starts with this version. Admin activity is excluded.</i>" .
+            "\n\nPaste an order ID to open it directly.";
+        $this->send($user, $text, [['📦 Delivery queue', 'admin-list:queue'], ['All orders', 'admin-list:all'],
+            ['⭐ Payments', 'admin-list:paid'], ['Refresh dashboard', 'admin']]);
+    }
+
     private function notify(): void
     {
         $pending = $this->orders->query("SELECT * FROM orders WHERE status IN ('queued','processing','completed')
@@ -205,7 +294,7 @@ final class Bot
             if (!$row['notified']) {
                 try {
                     $this->send($this->admin, "<b>New paid order</b>\nUser: " . $row['user'] . "\n" .
-                        $this->card($row), $this->adminButtons($row['id']));
+                        $this->card($row, false), [...$this->adminButtons($row['id']), ['Open order', 'detail:' . $row['id']]]);
                     $this->orders->execute('UPDATE orders SET notified=1 WHERE id=?', [$row['id']]);
                     $this->checkpoint();
                 } catch (TelegramError) {
@@ -235,6 +324,14 @@ final class Bot
         $parts = explode(':', $data);
         $action = $parts[0];
         $id = $parts[1] ?? '';
+        if ($user === $this->admin && !in_array($action, ['process', 'complete', 'confirm-complete'], true)) {
+            match ($action) {
+                'admin-list' => $this->adminList($user, $id, max(0, (int) ($parts[2] ?? 0))),
+                'detail' => $this->adminOrder($user, $id),
+                default => $this->adminDashboard($user),
+            };
+            return;
+        }
         switch ($action) {
             case 'home':
                 $this->send($user, "<b>Crowdio</b>\nOrder Telegram channel members in a few taps.\n\n" .
@@ -311,8 +408,14 @@ final class Bot
                 }
                 $this->send($user, "<b>Help &amp; Terms</b>\n\n" . $this->escape($terms), $this->customerButtons());
                 return;
-            case 'process':
             case 'complete':
+                if ($user === $this->admin) {
+                    $this->send($user, 'Mark order ' . $this->escape($id) . ' as delivered?',
+                        [['Confirm delivery', "confirm-complete:$id"], ['Back to order', "detail:$id"]]);
+                }
+                return;
+            case 'process':
+            case 'confirm-complete':
                 if ($user !== $this->admin) {
                     return;
                 }
@@ -323,9 +426,15 @@ final class Bot
                 if ($changed) {
                     $this->checkpoint();
                     $row = $this->orders->order($id);
-                    $this->send($user, 'Order ' . $this->escape($id) . ': ' . $state);
-                    $this->send($row['user'], $this->card($row), $this->customerButtons($id));
+                    if ($row['user'] !== $user) {
+                        try {
+                            $this->send($row['user'], $this->card($row), $this->customerButtons($id));
+                        } catch (TelegramError) {
+                            $this->send($user, 'Status saved. Telegram could not notify the customer.', [self::ADMIN_HOME]);
+                        }
+                    }
                 }
+                $this->adminOrder($user, $id);
                 return;
             default:
                 $this->send($user, 'That option has closed. Open the main menu to continue.', [self::HOME]);
@@ -336,7 +445,7 @@ final class Bot
     {
         if (isset($update['pre_checkout_query'])) {
             $query = $update['pre_checkout_query'];
-            $ok = microtime(true) < $this->acceptUntil &&
+            $ok = $query['from']['id'] !== $this->admin && microtime(true) < $this->acceptUntil &&
                 $this->orders->checkout($query);
             if ($ok) {
                 $this->checkpoint();
@@ -364,7 +473,11 @@ final class Bot
                 }
             }
             if (isset($query['data']) && ($query['message']['chat']['type'] ?? '') === 'private') {
-                $this->callback($query['from']['id'], $query['data']);
+                $user = $query['from']['id'];
+                if ($user !== $this->admin) {
+                    $this->orders->recordActivity($user, time());
+                }
+                $this->callback($user, $query['data']);
             }
             return;
         }
@@ -379,6 +492,19 @@ final class Bot
         }
         $text = trim($message['text'] ?? '');
         $command = strtok($text, " \t\n");
+        if ($user === $this->admin) {
+            if ($command === '/queue' || $command === '/orders' || $command === '/payments') {
+                $this->adminList($user, ['/queue' => 'queue', '/orders' => 'all', '/payments' => 'paid'][$command], 0);
+            } elseif (preg_match('/^[a-f0-9]{16}$/iD', $text)) {
+                $this->adminOrder($user, strtolower($text));
+            } else {
+                $this->adminDashboard($user);
+            }
+            return;
+        }
+        if ($text !== '') {
+            $this->orders->recordActivity($user, $message['date']);
+        }
         switch ($command) {
             case '/start':
             case '/orders':
@@ -389,18 +515,6 @@ final class Bot
             case '/paysupport':
                 $this->send($user, "<b>💬 Crowdio Support</b>\n\nOpen a chat with support and share the Order ID from My Orders.",
                     $this->customerButtons());
-                return;
-            case '/queue':
-                if ($user === $this->admin) {
-                    $rows = $this->orders->query("SELECT * FROM orders WHERE status IN ('queued','processing')
-                        AND charge NOT LIKE 'demo-%' ORDER BY created LIMIT 20");
-                    foreach ($rows as $row) {
-                        $this->send($user, $this->card($row), $this->adminButtons($row['id']));
-                    }
-                    if (!$rows) {
-                        $this->send($user, 'Queue is empty.');
-                    }
-                }
                 return;
         }
         $draft = $this->orders->first("SELECT id FROM orders WHERE user=? AND status='draft' AND purchased IS NOT NULL", [$user]);

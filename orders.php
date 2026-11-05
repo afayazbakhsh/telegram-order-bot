@@ -28,6 +28,8 @@ final class Orders
                   charge TEXT UNIQUE, notified INTEGER NOT NULL DEFAULT 0,
                   created INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value INTEGER);
+                CREATE TABLE IF NOT EXISTS customer_activity (
+                  user INTEGER PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS rejected_payments (
                   charge TEXT PRIMARY KEY, user INTEGER NOT NULL, order_id TEXT NOT NULL,
                   refunded INTEGER NOT NULL DEFAULT 0);
@@ -37,7 +39,7 @@ final class Orders
                 'customer_notified' => 'INTEGER NOT NULL DEFAULT 0',
                 'purchased' => 'INTEGER', 'bonus' => 'INTEGER NOT NULL DEFAULT 0',
                 'total_members' => 'INTEGER', 'offer_used' => 'INTEGER NOT NULL DEFAULT 0',
-                'invoice_expires' => 'INTEGER', 'checkout_id' => 'TEXT',
+                'invoice_expires' => 'INTEGER', 'checkout_id' => 'TEXT', 'paid_at' => 'INTEGER',
             ] as $column => $type) {
                 if (!in_array($column, $columns, true)) {
                     $this->db->exec("ALTER TABLE orders ADD COLUMN $column $type");
@@ -62,6 +64,14 @@ final class Orders
     public function first(string $sql, array $args = []): ?array
     {
         return $this->execute($sql, $args)->fetch() ?: null;
+    }
+
+    public function recordActivity(int $user, int $at): void
+    {
+        $this->execute("INSERT INTO customer_activity VALUES(?,?,?)
+            ON CONFLICT(user) DO UPDATE SET
+              first_seen=MIN(first_seen,excluded.first_seen),
+              last_seen=MAX(last_seen,excluded.last_seen)", [$user, $at, $at]);
     }
 
     public function order(string $id): ?array
@@ -218,8 +228,8 @@ final class Orders
                     [$charge, $user, $id]);
                 return;
             }
-            $this->execute("UPDATE orders SET status='queued',charge=?,offer_used=? WHERE id=?",
-                [$charge, (int) ($row['bonus'] > 0), $id]);
+            $this->execute("UPDATE orders SET status='queued',charge=?,offer_used=?,paid_at=? WHERE id=?",
+                [$charge, (int) ($row['bonus'] > 0), $paidAt, $id]);
         });
     }
 }
