@@ -110,7 +110,7 @@ final class Bot
         [$heading, $status] = match ($row['status']) {
             'queued' => ['✅ Payment received', 'Awaiting delivery'],
             'processing' => ['⏳ Order in progress', 'In progress'],
-            'completed' => ['✅ Order completed', 'Completed'],
+            'completed' => ['✅ Order delivered', 'Completed'],
             'refunded' => ['↩️ Payment refunded', 'Refunded'],
             'cancelled' => ['📦 Your order', 'Cancelled'],
             'awaiting_payment' => ['📦 Your order', 'Waiting for payment'],
@@ -125,6 +125,9 @@ final class Bot
             "\nStars: " . number_format($row['stars']) . "\nStatus: <b>$status</b>";
         if ($row['status'] === 'queued') {
             $text .= "\n\nOur team will deliver your order manually. We’ll let you know when delivery starts.";
+        }
+        if ($row['status'] === 'completed' && $row['completed_at'] !== null) {
+            $text .= "\nCompleted at: " . gmdate('Y-m-d H:i', $row['completed_at']) . ' UTC';
         }
         return $customer ? $text . "\n\nFor help, contact support and share your Order ID." : $text;
     }
@@ -186,7 +189,7 @@ final class Bot
 
     private function adminButtons(string $id): array
     {
-        return [['Start processing', "process:$id"], ['Complete', "complete:$id"]];
+        return [['Start processing', "process:$id"], ['✅ Done', "complete:$id"]];
     }
 
     private function adminOrder(int $user, string $id): void
@@ -210,9 +213,12 @@ final class Bot
             $text .= "\nRejected charge: <code>" . $this->escape($attempt['charge']) . '</code> · ' .
                 ($attempt['refunded'] ? 'Refunded' : 'Refund pending');
         }
+        if ($row['status'] === 'completed' && $row['completed_at'] !== null) {
+            $text .= "\nCustomer notification: " . ($row['customer_notified'] ? 'Sent' : 'Pending retry');
+        }
         $buttons = [self::ADMIN_HOME];
         if ($row['charge'] !== null && in_array($row['status'], ['queued', 'processing'], true)) {
-            array_unshift($buttons, ...($row['status'] === 'queued' ? $this->adminButtons($id) : [['Complete', "complete:$id"]]));
+            array_unshift($buttons, ...($row['status'] === 'queued' ? $this->adminButtons($id) : [['✅ Done', "complete:$id"]]));
         }
         $this->send($user, $text, $buttons);
     }
@@ -277,19 +283,24 @@ final class Bot
             ['⭐ Payments', 'admin-list:paid'], ['Refresh dashboard', 'admin']]);
     }
 
+    private function notifyCustomer(array $row): void
+    {
+        try {
+            $this->send($row['user'], $this->card($row), $this->customerButtons($row['id']));
+            $this->orders->execute('UPDATE orders SET customer_notified=1 WHERE id=?', [$row['id']]);
+            $this->checkpoint();
+        } catch (TelegramError) {
+            error_log('Customer order notification pending; will retry.');
+        }
+    }
+
     private function notify(): void
     {
         $pending = $this->orders->query("SELECT * FROM orders WHERE status IN ('queued','processing','completed')
             AND charge NOT LIKE 'demo-%' AND (notified=0 OR customer_notified=0) ORDER BY created");
         foreach ($pending as $row) {
             if (!$row['customer_notified']) {
-                try {
-                    $this->send($row['user'], $this->card($row), $this->customerButtons($row['id']));
-                    $this->orders->execute('UPDATE orders SET customer_notified=1 WHERE id=?', [$row['id']]);
-                    $this->checkpoint();
-                } catch (TelegramError) {
-                    error_log('Customer receipt pending; will retry.');
-                }
+                $this->notifyCustomer($row);
             }
             if (!$row['notified']) {
                 try {
@@ -410,8 +421,15 @@ final class Bot
                 return;
             case 'complete':
                 if ($user === $this->admin) {
-                    $this->send($user, 'Mark order ' . $this->escape($id) . ' as delivered?',
-                        [['Confirm delivery', "confirm-complete:$id"], ['Back to order', "detail:$id"]]);
+                    $row = $this->orders->order($id);
+                    if (!$row || !$row['charge'] || str_starts_with($row['charge'], 'demo-') ||
+                        !in_array($row['status'], ['queued', 'processing'], true)) {
+                        $this->adminOrder($user, $id);
+                        return;
+                    }
+                    $this->send($user, "<b>Confirm delivery</b>\n\n" . $this->card($row, false) .
+                        "\n\nConfirm once the full order has been delivered to this channel.",
+                        [['✅ Confirm Done', "confirm-complete:$id"], ['Back to order', "detail:$id"]]);
                 }
                 return;
             case 'process':
@@ -421,12 +439,16 @@ final class Bot
                 }
                 $state = $action === 'process' ? 'processing' : 'completed';
                 $from = $action === 'process' ? "'queued'" : "'queued','processing'";
-                $changed = $this->orders->execute("UPDATE orders SET status=? WHERE id=? AND status IN ($from)
-                    AND charge IS NOT NULL AND charge NOT LIKE 'demo-%'", [$state, $id])->rowCount();
+                $completion = $state === 'completed' ? ', completed_at=?, customer_notified=0' : '';
+                $args = $state === 'completed' ? [$state, time(), $id] : [$state, $id];
+                $changed = $this->orders->execute("UPDATE orders SET status=? $completion WHERE id=? AND status IN ($from)
+                    AND charge IS NOT NULL AND charge NOT LIKE 'demo-%'", $args)->rowCount();
                 if ($changed) {
                     $this->checkpoint();
                     $row = $this->orders->order($id);
-                    if ($row['user'] !== $user) {
+                    if ($state === 'completed') {
+                        $this->notifyCustomer($row);
+                    } elseif ($row['user'] !== $user) {
                         try {
                             $this->send($row['user'], $this->card($row), $this->customerButtons($id));
                         } catch (TelegramError) {

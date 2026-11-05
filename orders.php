@@ -39,7 +39,7 @@ final class Orders
                 'customer_notified' => 'INTEGER NOT NULL DEFAULT 0',
                 'purchased' => 'INTEGER', 'bonus' => 'INTEGER NOT NULL DEFAULT 0',
                 'total_members' => 'INTEGER', 'offer_used' => 'INTEGER NOT NULL DEFAULT 0',
-                'invoice_expires' => 'INTEGER', 'checkout_id' => 'TEXT', 'paid_at' => 'INTEGER',
+                'invoice_expires' => 'INTEGER', 'checkout_id' => 'TEXT', 'paid_at' => 'INTEGER', 'completed_at' => 'INTEGER',
             ] as $column => $type) {
                 if (!in_array($column, $columns, true)) {
                     $this->db->exec("ALTER TABLE orders ADD COLUMN $column $type");
