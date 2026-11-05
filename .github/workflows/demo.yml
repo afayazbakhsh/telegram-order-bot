@@ -2,8 +2,8 @@ name: Run bot (10-minute live session)
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths: ['.demo-request']
+    branches: [main, php-live-test]
+    paths: ['.demo-request', 'bot.php']
 permissions:
   contents: write
 concurrency:
@@ -13,23 +13,24 @@ jobs:
   live:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'php-live-test' || contains(github.event.head_commit.modified, '.demo-request')
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       ADMIN_ID: ${{ secrets.ADMIN_ID }}
       SUPPORT_CONTACT: ${{ secrets.SUPPORT_CONTACT || secrets.SUPPORT || vars.SUPPORT_CONTACT || vars.SUPPORT || '' }}
-      DEMO_MODE: '0'
+      MEMBER_PACKAGE_PRICE_STARS: ${{ vars.MEMBER_PACKAGE_PRICE_STARS || '385' }}
       RUN_SECONDS: '600'
       DB_PATH: /tmp/crowdio-live/orders.sqlite3
       STATE_REPOSITORY: ${{ github.repository }}
       STATE_GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: shivammathur/setup-php@v2
         with:
-          python-version: '3.12'
-      - run: python -m pip install -r requirements.txt
+          php-version: '8.4'
+          extensions: curl, pdo_sqlite, openssl
       - name: Validate secrets
         run: |
           test -n "$BOT_TOKEN" || { echo 'Add BOT_TOKEN Actions secret.'; exit 1; }
           test -n "$ADMIN_ID" || { echo 'Add ADMIN_ID Actions secret.'; exit 1; }
-      - run: python -u bot.py
+      - run: php bot.php
