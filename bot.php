@@ -19,7 +19,7 @@ final class Bot
     public function __construct(
         private string $token,
         private int $admin,
-        private int $stars,
+        private array $prices,
         private string $support,
         private Orders $orders,
         private ?GitHubState $state,
@@ -87,20 +87,21 @@ final class Bot
         return [$this->supportButton($order), self::MINE, self::HOME];
     }
 
-    private function price(int $stars): string
+    private function price(int $stars, int $quantity): string
     {
-        return '⭐ ' . number_format($stars) . ' Stars (' . self::REFERENCE . ')';
+        return '⭐ ' . number_format($stars) . ' Stars' . ($quantity === 1000 ? ' (' . self::REFERENCE . ')' : '');
     }
 
-    private function quantity(array $row): string
+    private function quantity(array $row, string $prefix = '🎁 '): string
     {
         if ($row['purchased'] === null) {
             return $this->escape($row['product']);
         }
         if ($row['bonus'] > 0) {
-            return '🎁 1,000 purchased + 500 bonus = 1,500 channel members';
+            return $prefix . number_format($row['purchased']) . ' purchased + ' . number_format($row['bonus']) .
+                ' bonus = ' . number_format($row['total_members']) . ' channel members';
         }
-        return Orders::PACKAGE;
+        return Orders::packageTitle($row['purchased']);
     }
 
     private function card(array $row): string
@@ -130,7 +131,7 @@ final class Bot
     private function review(int $user, array $row, bool $changed = false): void
     {
         $text = "<b>Review your order</b>\n\n" . $this->quantity($row) .
-            "\nChannel: " . $this->escape($row['target']) . "\n" . $this->price($row['stars']) .
+            "\nChannel: " . $this->escape($row['target']) . "\n" . $this->price($row['stars'], $row['purchased']) .
             "\nPayment is in Telegram Stars.\n";
         if ($row['bonus'] > 0) {
             $text .= "\nLaunch bonus for eligible first orders, while spots remain.\n";
@@ -153,7 +154,7 @@ final class Bot
             return;
         }
         // The callback price is a review version check, never the source of the charge.
-        $row = $this->orders->invoice($user, $id, $this->stars, $bonus, $stars);
+        $row = $this->orders->invoice($user, $id, $this->prices, $bonus, $stars);
         if (!$row) {
             $this->send($user, 'This review has closed. Check My Orders or start a new order.', [self::MINE, self::NEW]);
             return;
@@ -166,13 +167,14 @@ final class Bot
         $buttons = [['Edit Channel', "edit:$id"], ['Cancel Order', "cancel:$id"], self::MINE];
         try {
             $this->api('sendInvoice', [
-                'chat_id' => $user, 'title' => Orders::PACKAGE,
-                'description' => ($row['bonus'] ? '1,000 purchased + 500 bonus = 1,500 members' : '1,000 channel members') .
-                    "\nChannel: " . $row['target'] . "\n" . number_format($row['stars']) . ' Stars (' . self::REFERENCE .
-                    ")\nPayment is in Telegram Stars. Order ID: $id",
+                'chat_id' => $user, 'title' => $row['product'],
+                'description' => $this->quantity($row, '') . "\nChannel: " . $row['target'] .
+                    "\n" . number_format($row['stars']) . ' Stars' .
+                    ($row['purchased'] === 1000 ? ' (' . self::REFERENCE . ')' : '') .
+                    "\nPayment is in Telegram Stars. Order ID: $id",
                 'payload' => $id, 'provider_token' => '', 'currency' => 'XTR',
                 'start_parameter' => 'order-' . $id,
-                'prices' => [['label' => Orders::PACKAGE, 'amount' => $row['stars']]],
+                'prices' => [['label' => $row['product'], 'amount' => $row['stars']]],
             ]);
         } catch (TelegramError) {
             $this->send($user, 'If the invoice did not open, choose Edit Channel to restart checkout or Cancel Order.', $buttons);
@@ -236,24 +238,34 @@ final class Bot
         switch ($action) {
             case 'home':
                 $this->send($user, "<b>Crowdio</b>\nOrder Telegram channel members in a few taps.\n\n" .
-                    'Choose your package, add your public channel and pay with Stars.',
+                    'Choose a package, add your public channel and pay with Stars.',
                     [self::NEW, self::MINE, $this->supportButton(), ['Help & Terms', 'help']]);
                 return;
             case 'new':
-                if (!$this->stars) {
-                    $this->send($user, 'Ordering is temporarily unavailable.', $this->customerButtons());
-                    return;
+                $buttons = [];
+                $lines = [];
+                $offerAvailable = $this->orders->offerAvailable($user, time(), '');
+                foreach ($this->prices as $quantity => $price) {
+                    if ($price > 0) {
+                        $label = number_format($quantity) . ' members';
+                        $line = '<b>' . $label . '</b> · ' . $this->price($price, $quantity);
+                        if ($offerAvailable && in_array($quantity, Orders::BONUS_PACKAGES, true)) {
+                            $line .= "\n🎁 +" . number_format(Orders::BONUS) . ' bonus members on your first order · ' .
+                                number_format($quantity + Orders::BONUS) . ' members total';
+                        }
+                        $lines[] = $line;
+                        $buttons[] = [$label, "pick:$quantity"];
+                    }
                 }
-                $this->send($user, '<b>📦 ' . Orders::PACKAGE . "</b>\n" . $this->price($this->stars) .
-                    "\nPayment is in Telegram Stars.", [['Select Package', 'pick'], self::HOME]);
+                $buttons[] = self::HOME;
+                $this->send($user, "<b>📦 Choose your channel package</b>\n\n" .
+                    implode("\n\n", $lines) . "\n\nPayment is in Telegram Stars.", $buttons);
                 return;
             case 'pick':
             case 'edit':
-                if (!$this->stars) {
-                    $this->send($user, 'Ordering is temporarily unavailable.', $this->customerButtons());
-                    return;
-                }
-                $draft = $this->orders->draft($user, $this->stars, $action === 'edit' ? $id : null);
+                // The original one-package button can still exist in older chats.
+                $quantity = $action === 'pick' ? ($id === '' ? 1000 : (int) $id) : 0;
+                $draft = $this->orders->draft($user, $this->prices, $quantity, $action === 'edit' ? $id : null);
                 if (!$draft) {
                     $this->send($user, 'This order can’t be changed right now. Check My Orders or contact support.',
                         $this->customerButtons($id ?: null));
@@ -271,7 +283,7 @@ final class Bot
                     'This order can’t be cancelled here. Check My Orders or contact support.', $this->customerButtons());
                 return;
             case 'pay':
-                if (count($parts) === 4 && $this->stars) {
+                if (count($parts) === 4) {
                     $this->invoice($user, $id, (int) $parts[2], (int) $parts[3]);
                 } else {
                     $this->send($user, 'This checkout has closed. Open New Order to try again.', $this->customerButtons());
@@ -391,8 +403,8 @@ final class Bot
                 }
                 return;
         }
-        $draft = $this->orders->first("SELECT id FROM orders WHERE user=? AND status='draft' AND purchased=1000", [$user]);
-        if (!$draft || !$this->stars) {
+        $draft = $this->orders->first("SELECT id FROM orders WHERE user=? AND status='draft' AND purchased IS NOT NULL", [$user]);
+        if (!$draft) {
             $this->callback($user, 'home');
             return;
         }
@@ -401,9 +413,11 @@ final class Bot
                 [['Cancel Order', 'cancel:' . $draft['id']], self::HOME]);
             return;
         }
-        $row = $this->orders->review($user, '@' . $match[1], $this->stars);
+        $row = $this->orders->review($user, '@' . $match[1], $this->prices);
         if ($row) {
             $this->review($user, $row);
+        } else {
+            $this->send($user, 'This package is currently unavailable. Choose another package to continue.', [self::NEW]);
         }
     }
 
@@ -475,7 +489,7 @@ function main(): void
     $rawStars = trim((string) getenv('MEMBER_PACKAGE_PRICE_STARS'));
     $stars = filter_var($rawStars, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 2147483647]]);
     if (!$stars) {
-        fwrite(STDERR, "Sales are closed until MEMBER_PACKAGE_PRICE_STARS is set to a positive integer.\n");
+        fwrite(STDERR, "The 1,000-member package is unavailable until MEMBER_PACKAGE_PRICE_STARS is set.\n");
     }
     $path = getenv('DB_PATH') ?: __DIR__ . '/data/orders.sqlite3';
     if (!is_dir(dirname($path)) && !mkdir(dirname($path), 0700, true) && !is_dir(dirname($path))) {
@@ -492,7 +506,8 @@ function main(): void
     }
     $state = $repo && $githubToken ? new GitHubState($token, $repo, $githubToken) : null;
     $state?->restore($path);
-    $bot = new Bot($token, $admin, $stars ?: 0, $support, new Orders($path), $state, $path);
+    $prices = [500 => 193, 1000 => $stars ?: 0, 5000 => 1925];
+    $bot = new Bot($token, $admin, $prices, $support, new Orders($path), $state, $path);
     $bot->run(max(0, (int) getenv('RUN_SECONDS')));
 }
 
