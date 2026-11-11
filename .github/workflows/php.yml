@@ -1,0 +1,18 @@
+name: PHP checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, fileinfo, mbstring, pdo_sqlite
+          coverage: none
+      - run: composer validate --no-check-publish
+      - run: composer lint
+      - run: composer test

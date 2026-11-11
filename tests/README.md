@@ -1,0 +1,1 @@
+run.php is a dependency-free integration-style suite using temporary SQLite databases and a fake Telegram gateway. GitHub Actions runs it under PHP 8.3 with SQLite and mbstring. No test is considered run until the workflow executes.
