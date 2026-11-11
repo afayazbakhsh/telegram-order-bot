@@ -1,0 +1,9 @@
+{
+  "name": "crowdio/telegram-voice-mcp-mvp",
+  "description": "Isolated Telegram voice transcription order intake and MCP bridge MVP",
+  "type": "project",
+  "license": "MIT",
+  "require": { "php": ">=8.3", "ext-pdo": "*", "ext-pdo_sqlite": "*", "ext-curl": "*", "ext-fileinfo": "*", "ext-mbstring": "*" },
+  "require-dev": {},
+  "scripts": { "test": "php tests/run.php", "lint": "find src public tests scripts -name '*.php' -print0 | xargs -0 -n1 php -l" }
+}

@@ -1,6 +1,8 @@
 .env
-.venv/
-__pycache__/
-*.pyc
-data/
-*.sqlite3*
+/private-config.php
+/vendor/
+/storage/**
+!/storage/.gitkeep
+/tests/fixtures/private-audio.*
+/coverage/
+.phpunit.cache/
