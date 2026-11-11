@@ -64,3 +64,16 @@ The current environment has no PHP or Composer runtime, so PHP syntax checks and
 
 Replacing the old repository contents does not deploy or alter any live Crowdio hosting. The new code contains no bot token or production data. Audio retention is controlled by RETENTION_DAYS; the cleanup script removes expired files and corresponding order/transcript rows.
 
+
+## Connect ChatGPT with OAuth
+
+Enter the deployed HTTPS URL ending in /mcp in ChatGPT's custom plugin form
+and select OAuth. On the authorization page hosted on your own bot domain,
+enter the MCP_BEARER_TOKEN from private-config.php as the operator key.
+ChatGPT receives a separate, short lived access token and a rotating refresh
+token. Existing clients can still send the configured static bearer token.
+
+If an existing deployment is updated manually, replace src/App.php and
+public/.htaccess and add src/McpOAuth.php. Keep the private configuration,
+database, audio directory and Telegram webhook. The OAuth table is created
+on first use. Use a fresh, random MCP_BEARER_TOKEN for the operator key.

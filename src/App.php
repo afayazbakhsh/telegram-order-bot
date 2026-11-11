@@ -2,11 +2,12 @@
 declare(strict_types=1);
 namespace App;
 final class App {
- private OrderService $orders; private Logger $log;
- public function __construct(private readonly Config $cfg) { $db=new Database($cfg->dbPath);$this->log=new Logger($cfg->logPath);$tg=new TelegramClient($cfg->telegramToken);$this->orders=new OrderService($db->pdo(),$cfg,$tg,$this->log); }
+ private OrderService $orders; private Logger $log; private McpOAuth $oauth;
+ public function __construct(private readonly Config $cfg) { $db=new Database($cfg->dbPath);$this->oauth=new McpOAuth($cfg,$db->pdo());$this->log=new Logger($cfg->logPath);$tg=new TelegramClient($cfg->telegramToken);$this->orders=new OrderService($db->pdo(),$cfg,$tg,$this->log); }
  public function handle(): void {
   $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH)?:'/';$method=$_SERVER['REQUEST_METHOD']??'GET';
   try {
+   if($this->oauth->handle($path,$method))return;
    if($path==='/health'&&$method==='GET'){$this->json(['status'=>'ok']);return;}
    if($path==='/telegram/webhook'&&$method==='POST'){$this->webhook();return;}
    if($path==='/mcp'&&$method==='POST'){$this->mcp();return;}
@@ -22,7 +23,7 @@ final class App {
   try{$this->orders->receive($update);$this->json(['ok'=>true]);}catch(\InvalidArgumentException $e){$this->json(['ok'=>true]);}catch(\Throwable $e){$this->log->error('webhook_processing_failed',['update_id'=>$update['update_id']??null]);http_response_code(500);$this->json(['error'=>'processing_failed']);}
  }
  private function mcp(): void {
-  $auth=(string)($_SERVER['HTTP_AUTHORIZATION']??'');if(!McpAuth::authorized($auth,$this->cfg->mcpToken)){http_response_code(401);header('WWW-Authenticate: Bearer');$this->json(['error'=>'unauthorized']);return;}
+  $auth=(string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??'');if(!McpAuth::authorized($auth,$this->cfg->mcpToken)&&!$this->oauth->accepts($auth)){http_response_code(401);header('WWW-Authenticate: Bearer resource_metadata="'.$this->cfg->baseUrl.'/.well-known/oauth-protected-resource/mcp"');$this->json(['error'=>'unauthorized']);return;}
   $origin=(string)($_SERVER['HTTP_ORIGIN']??'');if($origin!==''&&!in_array($origin,$this->cfg->allowedOrigins,true)){http_response_code(403);$this->json(['error'=>'origin_forbidden']);return;}
   $accept=(string)($_SERVER['HTTP_ACCEPT']??'');if(stripos($accept,'application/json')===false||stripos($accept,'text/event-stream')===false){http_response_code(406);$this->json(['error'=>'accept_must_include_json_and_event_stream']);return;}
   if(stripos((string)($_SERVER['CONTENT_TYPE']??''),'application/json')!==0){http_response_code(415);$this->json(['error'=>'content_type_must_be_application_json']);return;}
