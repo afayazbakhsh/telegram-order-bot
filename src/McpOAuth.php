@@ -5,6 +5,7 @@ namespace App;
 
 final class McpOAuth
 {
+    private const CLIENT_AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post'];
     public function __construct(private Config $config, private \PDO $db) {}
 
     public function handle(string $path, string $method): bool
@@ -19,7 +20,7 @@ final class McpOAuth
             $this->json(['issuer' => $base, 'authorization_endpoint' => $base . '/oauth/authorize',
                 'token_endpoint' => $base . '/oauth/token', 'registration_endpoint' => $base . '/oauth/register',
                 'response_types_supported' => ['code'], 'grant_types_supported' => ['authorization_code', 'refresh_token'],
-                'code_challenge_methods_supported' => ['S256'], 'token_endpoint_auth_methods_supported' => ['none'],
+                'code_challenge_methods_supported' => ['S256'], 'token_endpoint_auth_methods_supported' => self::CLIENT_AUTH_METHODS,
                 'scopes_supported' => ['mcp']]);
         } elseif ($method === 'POST' && $path === '/oauth/register') {
             $this->register();
@@ -48,16 +49,28 @@ final class McpOAuth
     {
         $input = json_decode((string) file_get_contents('php://input', false, null, 0, 8192), true);
         $uris = $input['redirect_uris'] ?? null;
-        if (!is_array($uris) || count($uris) !== 1 || !is_string($uris[0] ?? null)
-            || !$this->allowedRedirect($uris[0])
-            || ($input['token_endpoint_auth_method'] ?? 'none') !== 'none') {
+        $method = $input['token_endpoint_auth_method'] ?? 'client_secret_basic';
+        if (!is_array($uris) || !array_is_list($uris) || count($uris) < 1 || count($uris) > 8
+            || !in_array($method, self::CLIENT_AUTH_METHODS, true)) {
             $this->json(['error' => 'invalid_client_metadata'], 400);
             return;
         }
-        $encoded = $this->base64url($uris[0]);
-        $this->json(['client_id' => $encoded . '.' . $this->sign('client', $encoded),
-            'redirect_uris' => $uris, 'token_endpoint_auth_method' => 'none',
-            'response_types' => ['code'], 'grant_types' => ['authorization_code', 'refresh_token']], 201);
+        foreach ($uris as $uri) {
+            if (!is_string($uri) || !$this->allowedRedirect($uri)) {
+                $this->json(['error' => 'invalid_redirect_uri'], 400);
+                return;
+            }
+        }
+
+        $encoded = $this->base64url(json_encode(['redirects' => $uris, 'method' => $method], JSON_THROW_ON_ERROR));
+        $client = $encoded . '.' . $this->sign('client', $encoded);
+        $response = ['client_id' => $client, 'redirect_uris' => $uris, 'token_endpoint_auth_method' => $method,
+            'response_types' => ['code'], 'grant_types' => ['authorization_code', 'refresh_token']];
+        if ($method !== 'none') {
+            $response['client_secret'] = $this->sign('client-secret', $client);
+            $response['client_secret_expires_at'] = 0;
+        }
+        $this->json($response, 201);
     }
 
     private function authorize(string $method): void
@@ -111,7 +124,11 @@ final class McpOAuth
     private function exchange(): void
     {
         $grant = $this->field($_POST, 'grant_type');
-        $client = $this->field($_POST, 'client_id');
+        $client = $this->authenticatedClient();
+        if ($client === null) {
+            $this->json(['error' => 'invalid_client'], 401);
+            return;
+        }
         $redirect = $this->field($_POST, 'redirect_uri');
         $verifier = $this->field($_POST, 'code_verifier');
         if (!$this->validResource($_POST)) {
@@ -184,9 +201,53 @@ final class McpOAuth
 
     private function clientMatches(string $client, string $redirect): bool
     {
-        $encoded = $this->base64url($redirect);
-        return $this->allowedRedirect($redirect)
-            && hash_equals($encoded . '.' . $this->sign('client', $encoded), $client);
+        $registration = $this->clientRegistration($client);
+        return $registration !== null && in_array($redirect, $registration['redirects'], true);
+    }
+
+    private function clientRegistration(string $client): ?array
+    {
+        [$encoded, $signature] = array_pad(explode('.', $client, 2), 2, '');
+        if ($encoded === '' || !hash_equals($this->sign('client', $encoded), $signature)) {
+            return null;
+        }
+        $decoded = base64_decode(strtr($encoded, '-_', '+/'), true);
+        if ($decoded === false) {
+            return null;
+        }
+        $registration = json_decode($decoded, true);
+        if (is_array($registration)) {
+            return $registration;
+        }
+        return $this->allowedRedirect($decoded) ? ['redirects' => [$decoded], 'method' => 'none'] : null;
+    }
+
+    private function authenticatedClient(): ?string
+    {
+        $client = $this->field($_POST, 'client_id');
+        $secret = $this->field($_POST, 'client_secret');
+        $method = $secret === '' ? 'none' : 'client_secret_post';
+        $header = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+        if (preg_match('/^Basic ([A-Za-z0-9+\/=]+)$/iD', $header, $match)) {
+            $decoded = base64_decode($match[1], true);
+            if ($decoded === false || !str_contains($decoded, ':') || $secret !== '') {
+                return null;
+            }
+            [$basicClient, $secret] = array_map('urldecode', explode(':', $decoded, 2));
+            if ($client !== '' && $client !== $basicClient) {
+                return null;
+            }
+            $client = $basicClient;
+            $method = 'client_secret_basic';
+        }
+        $registration = $this->clientRegistration($client);
+        if ($registration === null || $registration['method'] !== $method) {
+            return null;
+        }
+        if ($method !== 'none' && !hash_equals($this->sign('client-secret', $client), $secret)) {
+            return null;
+        }
+        return $client;
     }
 
     private function validResource(array $input): bool
