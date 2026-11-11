@@ -57,6 +57,7 @@ final class McpOAuth
         }
         foreach ($uris as $uri) {
             if (!is_string($uri) || !$this->allowedRedirect($uri)) {
+                $this->logRejectedRedirect($uri);
                 $this->json(['error' => 'invalid_redirect_uri'], 400);
                 return;
             }
@@ -189,6 +190,26 @@ final class McpOAuth
         $query = $this->db->prepare('INSERT INTO oauth_credentials VALUES (?, ?, ?, ?, ?, ?)');
         $query->execute([hash('sha256', $secret), $kind, $client, time() + $ttl, $redirect, $challenge]);
         return $secret;
+    }
+
+    private function logRejectedRedirect(mixed $uri): void
+    {
+        $parts = is_string($uri) ? parse_url($uri) : false;
+        $parts = is_array($parts) ? $parts : [];
+        $entry = [
+            'time' => gmdate(DATE_ATOM),
+            'event' => 'oauth_registration_redirect_rejected',
+            'scheme' => substr($parts['scheme'] ?? '', 0, 16),
+            'host' => substr($parts['host'] ?? '', 0, 253),
+            'path' => substr($parts['path'] ?? '', 0, 255),
+            'port' => $parts['port'] ?? null,
+            'has_query' => isset($parts['query']),
+            'has_fragment' => isset($parts['fragment']),
+        ];
+        $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (@file_put_contents($this->config->logPath, $line . PHP_EOL, FILE_APPEND | LOCK_EX) !== false) {
+            @chmod($this->config->logPath, 0600);
+        }
     }
 
     private function allowedRedirect(string $redirect): bool
