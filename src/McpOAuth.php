@@ -92,7 +92,7 @@ final class McpOAuth
 
         header('Cache-Control: no-store');
         header('Referrer-Policy: no-referrer');
-        header("Content-Security-Policy: default-src 'none'; form-action 'self'; frame-ancestors 'none'");
+        header("Content-Security-Policy: default-src 'none'; form-action 'self' https://chatgpt.com https://chat.openai.com; frame-ancestors 'none'");
         $binding = http_build_query([$client, $redirect, $challenge, $state]);
         if ($method === 'POST') {
             [$deadline, $signature] = array_pad(explode('.', $this->field($_POST, 'approval'), 2), 2, '');
