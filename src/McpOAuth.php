@@ -217,7 +217,7 @@ final class McpOAuth
         return in_array($redirect, [
             'https://chatgpt.com/connector_platform_oauth_redirect',
             'https://chat.openai.com/connector_platform_oauth_redirect',
-        ], true);
+        ], true) || preg_match('#\Ahttps://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]{1,128}\z#', $redirect) === 1;
     }
 
     private function clientMatches(string $client, string $redirect): bool
